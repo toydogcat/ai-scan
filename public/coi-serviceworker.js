@@ -25,7 +25,11 @@ if (typeof window === 'undefined') {
         const r = event.request;
         
         // Do not intercept tracking scripts or fonts that do not support COEP/CORS explicitly
-        if (r.url.includes("busuanzi.ibruce.info") || r.url.includes("cdnjs.cloudflare.com")) {
+        if (
+            r.url.includes("busuanzi.ibruce.info") || 
+            r.url.includes("cdnjs.cloudflare.com") ||
+            r.url.includes("vercount.one")
+        ) {
             return; 
         }
 
