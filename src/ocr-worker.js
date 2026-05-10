@@ -1,44 +1,46 @@
 import * as ort from 'onnxruntime-web';
 import { PaddleOcrService } from 'paddleocr';
 
-console.log("[OCR Worker] Booting script. Checking capabilities:");
-console.log("[OCR Worker]   - self.crossOriginIsolated =", self.crossOriginIsolated);
-console.log("[OCR Worker]   - typeof SharedArrayBuffer =", typeof SharedArrayBuffer);
-
-const publicBase = `${import.meta.env.BASE_URL}onnx-wasm/`;
-const loaderUrl = `${publicBase}ort-wasm-simd-threaded.js`;
 
 let ocrService = null;
+let wasmInitialized = false;
 
-// Perform module setup immediately but log extensively for debugging failures
-try {
-  console.log("[OCR Worker] Fetching WASM runtime loader from:", loaderUrl);
-  const response = await fetch(loaderUrl);
-  if (!response.ok) {
-    throw new Error(`HTTP Error ${response.status} while fetching loader.`);
-  }
-  const scriptText = await response.text();
-  console.log("[OCR Worker] Loaded runtime loader, size:", scriptText.length, "bytes");
-  
-  const blobUrl = URL.createObjectURL(new Blob([scriptText], { type: 'application/javascript' }));
-  console.log("[OCR Worker] Generated Blob Proxy URL for loader:", blobUrl);
-
-  ort.env.wasm.wasmPaths = {
-    mjs: blobUrl,
-    wasm: `${publicBase}ort-wasm-simd-threaded.wasm`,
-  };
-  console.log("[OCR Worker] Assigned wasmPaths to ort.env.wasm.");
-} catch (err) {
-  console.error("[OCR Worker] Fatal boot crash during runtime setup:", err);
-  self.postMessage({ type: 'error', data: `Worker Boot Error: ${err.message}` });
-}
+console.log("[OCR Worker] Synchronous boot. Listening for messages...");
 
 self.onmessage = async (event) => {
   const { type, data } = event.data;
 
   if (type === 'init') {
     try {
-      self.postMessage({ type: 'status', data: '正在載入 OCR 模型...' });
+      self.postMessage({ type: 'status', data: '正在初始化執行環境...' });
+      console.log("[OCR Worker] Init signal received. Starting process.");
+      console.log("[OCR Worker] State: self.crossOriginIsolated =", self.crossOriginIsolated);
+      console.log("[OCR Worker] State: typeof SharedArrayBuffer =", typeof SharedArrayBuffer);
+
+      if (!wasmInitialized) {
+        const publicBase = `${import.meta.env.BASE_URL}onnx-wasm/`;
+        const loaderUrl = `${publicBase}ort-wasm-simd-threaded.js`;
+
+        console.log("[OCR Worker] Fetching runtime loader from:", loaderUrl);
+        const response = await fetch(loaderUrl);
+        if (!response.ok) {
+          throw new Error(`HTTP Error ${response.status} downloading loader.`);
+        }
+        const scriptText = await response.text();
+        console.log("[OCR Worker] Loader fetched. Size:", scriptText.length);
+
+        const blobUrl = URL.createObjectURL(new Blob([scriptText], { type: 'application/javascript' }));
+        console.log("[OCR Worker] Generated Blob Proxy:", blobUrl);
+
+        ort.env.wasm.wasmPaths = {
+          mjs: blobUrl,
+          wasm: `${publicBase}ort-wasm-simd-threaded.wasm`,
+        };
+        wasmInitialized = true;
+        console.log("[OCR Worker] Runtime configuration loaded.");
+      }
+
+      self.postMessage({ type: 'status', data: '正在配置 OCR 引擎...' });
       console.log("[OCR Worker] Starting configuration...");
 
       // Explicitly match the successful multi-thread model of ai-yolo
