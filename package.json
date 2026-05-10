@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "description": "The scan tool.",
   "scripts": {
+    "predev": "node patch_wasm_js.js",
     "dev": "vite --host 0.0.0.0",
     "dev:https": "HTTPS=true vite --host 0.0.0.0",
+    "prebuild": "node patch_wasm_js.js",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -23,6 +25,8 @@
   "dependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@zxing/browser": "^0.2.0",
+    "onnxruntime-web": "^1.26.0",
+    "paddleocr": "^1.1.1",
     "vite": "^8.0.11"
   }
 }

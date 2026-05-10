@@ -1,4 +1,5 @@
 import { BarcodeFormat, BrowserCodeReader, BrowserMultiFormatReader } from '@zxing/browser';
+import OCRWorker from './ocr-worker.js?worker';
 import './styles.css';
 
 const formats = [
@@ -20,9 +21,36 @@ const formats = [
 const reader = new BrowserMultiFormatReader();
 reader.possibleFormats = formats;
 
+const ocrModels = {
+  v4_mobile: {
+    label: 'PP-OCRv4 Mobile',
+    base: 'https://huggingface.co/tobytoy/yolo_base_home/resolve/main/paddle',
+    det: '/ch_PP-OCRv4_det_infer.onnx',
+    rec: '/ch_PP-OCRv4_rec_infer.onnx',
+    dict: '/ppocr_keys_v1.txt',
+  },
+  v4_server: {
+    label: 'PP-OCRv4 Server',
+    base: 'https://huggingface.co/tobytoy/yolo_base_home/resolve/main/paddle',
+    det: '/ch_PP-OCRv4_server_det_infer.onnx',
+    rec: '/ch_PP-OCRv4_server_rec_infer.onnx',
+    dict: '/ppocr_keys_v1.txt',
+  },
+  v3_balanced: {
+    label: 'PP-OCRv3',
+    base: 'https://huggingface.co/tobytoy/yolo_base_home/resolve/main/paddle',
+    det: '/ch_PP-OCRv3_det_infer.onnx',
+    rec: '/ch_PP-OCRv3_rec_infer.onnx',
+    dict: '/ppocr_keys_v1.txt',
+  },
+};
+
 let controls = null;
 let currentImageUrl = '';
 let lastResultKey = '';
+let ocrWorker = null;
+let ocrWorkerModel = '';
+let ocrInitPromise = null;
 let history = [];
 
 document.querySelector('#app').innerHTML = `
@@ -31,7 +59,7 @@ document.querySelector('#app').innerHTML = `
       <div>
         <p class="eyebrow">Vite + GitHub Pages</p>
         <h1 id="title">AI Scan</h1>
-        <p class="intro">用相機或圖片掃描 QR Code、EAN、UPC、Code 128、Code 39 等常見條碼。</p>
+        <p class="intro">用相機或圖片掃描 QR Code、常見條碼，也能 OCR 辨識圖片文字並快速複製。</p>
       </div>
       <div class="status-pill" id="cameraSupport">檢查相機中</div>
     </section>
@@ -87,6 +115,25 @@ document.querySelector('#app').innerHTML = `
               <button id="openButton" type="button" class="secondary" disabled>開啟網址</button>
             </div>
           </section>
+
+          <section class="result-box" aria-live="polite">
+            <div class="result-label">OCR 文字辨識</div>
+            <label class="field compact-field">
+              <span>模型</span>
+              <select id="ocrModel">
+                <option value="v4_mobile">PP-OCRv4 Mobile</option>
+                <option value="v4_server">PP-OCRv4 Server</option>
+                <option value="v3_balanced">PP-OCRv3</option>
+              </select>
+            </label>
+            <pre id="ocrText">尚未辨識文字</pre>
+            <ol id="ocrItems" class="ocr-items"></ol>
+            <div id="ocrStatus" class="mini-status">OCR 待命中。</div>
+            <div class="button-row compact">
+              <button id="ocrButton" type="button">OCR</button>
+              <button id="copyOcrButton" type="button" class="secondary" disabled>複製文字</button>
+            </div>
+          </section>
         </aside>
       </div>
     </section>
@@ -102,12 +149,18 @@ const elements = {
   cameraSupport: document.querySelector('#cameraSupport'),
   cameraSelect: document.querySelector('#cameraSelect'),
   copyButton: document.querySelector('#copyButton'),
+  copyOcrButton: document.querySelector('#copyOcrButton'),
   dropText: document.querySelector('#dropText'),
   dropzone: document.querySelector('#dropzone'),
   historyList: document.querySelector('#historyList'),
   imageInput: document.querySelector('#imageInput'),
   imagePreview: document.querySelector('#imagePreview'),
   openButton: document.querySelector('#openButton'),
+  ocrButton: document.querySelector('#ocrButton'),
+  ocrItems: document.querySelector('#ocrItems'),
+  ocrModel: document.querySelector('#ocrModel'),
+  ocrStatus: document.querySelector('#ocrStatus'),
+  ocrText: document.querySelector('#ocrText'),
   resultFormat: document.querySelector('#resultFormat'),
   resultText: document.querySelector('#resultText'),
   resultTime: document.querySelector('#resultTime'),
@@ -120,10 +173,16 @@ const elements = {
 
 let mode = 'camera';
 let latestValue = '';
+let latestOcrText = '';
 
 function setStatus(message, tone = 'neutral') {
   elements.status.textContent = message;
   elements.status.dataset.tone = tone;
+}
+
+function setOcrStatus(message, tone = 'neutral') {
+  elements.ocrStatus.textContent = message;
+  elements.ocrStatus.dataset.tone = tone;
 }
 
 function isUrl(value) {
@@ -139,12 +198,21 @@ function formatName(format) {
   return String(format).replaceAll('_', ' ');
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function renderHistory() {
   elements.historyList.innerHTML = history
     .map(
       (item) => `
         <li>
-          <span>${item.text}</span>
+          <span>${escapeHtml(item.text)}</span>
           <small>${formatName(item.format)} · ${item.time}</small>
         </li>
       `,
@@ -253,11 +321,212 @@ function stopImagePreview() {
   }
 }
 
+function captureVideoFrame() {
+  const { videoWidth, videoHeight } = elements.video;
+
+  if (!videoWidth || !videoHeight) {
+    throw new Error('相機畫面尚未準備好');
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = videoWidth;
+  canvas.height = videoHeight;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(elements.video, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function imageElementToCanvas() {
+  if (!currentImageUrl || !elements.imagePreview.naturalWidth) {
+    throw new Error('請先選擇圖片');
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = elements.imagePreview.naturalWidth;
+  canvas.height = elements.imagePreview.naturalHeight;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(elements.imagePreview, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function getOcrCanvas() {
+  if (mode === 'image') {
+    return imageElementToCanvas();
+  }
+
+  return captureVideoFrame();
+}
+
+function modelUrl(config, key) {
+  const value = config[key];
+  return value.startsWith('http') ? value : `${config.base}${value}`;
+}
+
+function resetOcrOutput() {
+  latestOcrText = '';
+  elements.ocrText.textContent = '尚未辨識文字';
+  elements.ocrItems.innerHTML = '';
+  elements.copyOcrButton.disabled = true;
+}
+
+async function initOcrWorker() {
+  const modelId = elements.ocrModel.value;
+
+  if (ocrWorker && ocrWorkerModel === modelId) {
+    return ocrWorker;
+  }
+
+  if (ocrInitPromise) {
+    return ocrInitPromise;
+  }
+
+  ocrInitPromise = (async () => {
+    const config = ocrModels[modelId] || ocrModels.v4_mobile;
+
+    if (ocrWorker) {
+      ocrWorker.terminate();
+      ocrWorker = null;
+    }
+
+    setOcrStatus(`正在下載 ${config.label}...`);
+    elements.ocrButton.disabled = true;
+
+    const [detResponse, recResponse, dictResponse] = await Promise.all([
+      fetch(modelUrl(config, 'det')),
+      fetch(modelUrl(config, 'rec')),
+      fetch(modelUrl(config, 'dict')),
+    ]);
+
+    if (!detResponse.ok || !recResponse.ok || !dictResponse.ok) {
+      throw new Error('無法從 Hugging Face 下載 OCR 模型');
+    }
+
+    const [detBuffer, recBuffer, dictContent] = await Promise.all([
+      detResponse.arrayBuffer(),
+      recResponse.arrayBuffer(),
+      dictResponse.text(),
+    ]);
+
+    const worker = new OCRWorker();
+
+    await new Promise((resolve, reject) => {
+      worker.onmessage = (event) => {
+        const { type, data } = event.data;
+
+        if (type === 'status') {
+          setOcrStatus(data);
+        } else if (type === 'initialized') {
+          resolve();
+        } else if (type === 'error') {
+          reject(new Error(data));
+        }
+      };
+
+      worker.onerror = (error) => {
+        reject(new Error(error.message || 'OCR Worker 發生錯誤'));
+      };
+
+      worker.postMessage(
+        {
+          type: 'init',
+          data: {
+            detBuffer,
+            recBuffer,
+            dictContent,
+          },
+        },
+        [detBuffer, recBuffer],
+      );
+    });
+
+    worker.onmessage = handleOcrWorkerMessage;
+    ocrWorker = worker;
+    ocrWorkerModel = modelId;
+    setOcrStatus(`${config.label} 已就緒。`, 'success');
+    return worker;
+  })();
+
+  try {
+    return await ocrInitPromise;
+  } finally {
+    ocrInitPromise = null;
+    elements.ocrButton.disabled = false;
+  }
+}
+
+function renderOcrResults(results, duration) {
+  const items = Array.isArray(results) ? results : [];
+  latestOcrText = items.map((item) => item.text).filter(Boolean).join('\n').trim();
+  elements.ocrText.textContent = latestOcrText || '沒有辨識到文字';
+  elements.copyOcrButton.disabled = !latestOcrText;
+  elements.ocrItems.innerHTML = items
+    .map(
+      (item) => `
+        <li>
+          <button type="button" class="ocr-item" data-text="${encodeURIComponent(item.text || '')}">
+            <span>${escapeHtml(item.text || '')}</span>
+            <small>${Math.round((item.confidence || 0) * 100)}%</small>
+          </button>
+        </li>
+      `,
+    )
+    .join('');
+
+  setOcrStatus(
+    latestOcrText ? `OCR 完成，${items.length} 段文字，${duration} ms。` : 'OCR 完成，但沒有文字。',
+    latestOcrText ? 'success' : 'warning',
+  );
+}
+
+function handleOcrWorkerMessage(event) {
+  const { type, data } = event.data;
+
+  if (type === 'status') {
+    setOcrStatus(data);
+  } else if (type === 'result') {
+    renderOcrResults(data.results, data.duration);
+    elements.ocrButton.disabled = false;
+  } else if (type === 'error') {
+    setOcrStatus(data, 'error');
+    elements.ocrButton.disabled = false;
+  }
+}
+
+async function runOcr() {
+  elements.ocrButton.disabled = true;
+  elements.copyOcrButton.disabled = true;
+  setOcrStatus('準備 OCR...');
+
+  try {
+    const canvas = getOcrCanvas();
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const worker = await initOcrWorker();
+
+    setOcrStatus('送出 OCR 推論...');
+    worker.postMessage(
+      {
+        type: 'recognize',
+        data: {
+          imageData: imageData.data,
+          width: canvas.width,
+          height: canvas.height,
+        },
+      },
+      [imageData.data.buffer],
+    );
+  } catch (error) {
+    setOcrStatus(`OCR 失敗：${error.message || error.name}`, 'error');
+    elements.ocrButton.disabled = false;
+  }
+}
+
 async function scanImage(file) {
   if (!file) return;
 
   stopCamera();
   stopImagePreview();
+  resetOcrOutput();
   currentImageUrl = URL.createObjectURL(file);
   elements.imagePreview.src = currentImageUrl;
   elements.imagePreview.classList.remove('hidden');
@@ -332,9 +601,39 @@ elements.openButton.addEventListener('click', () => {
   }
 });
 
+elements.ocrButton.addEventListener('click', runOcr);
+
+elements.copyOcrButton.addEventListener('click', async () => {
+  if (!latestOcrText) return;
+  await navigator.clipboard.writeText(latestOcrText);
+  setOcrStatus('已複製 OCR 文字。', 'success');
+});
+
+elements.ocrItems.addEventListener('click', async (event) => {
+  const item = event.target.closest('.ocr-item');
+  if (!item) return;
+
+  const text = decodeURIComponent(item.dataset.text || '');
+  if (!text) return;
+
+  await navigator.clipboard.writeText(text);
+  setOcrStatus('已複製單段 OCR 文字。', 'success');
+});
+
+elements.ocrModel.addEventListener('change', () => {
+  resetOcrOutput();
+  if (ocrWorker) {
+    ocrWorker.terminate();
+    ocrWorker = null;
+  }
+  ocrWorkerModel = '';
+  setOcrStatus('模型已變更，下一次 OCR 會重新下載。');
+});
+
 window.addEventListener('beforeunload', () => {
   stopCamera();
   stopImagePreview();
+  if (ocrWorker) ocrWorker.terminate();
 });
 
 loadCameras();

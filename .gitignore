@@ -15,6 +15,7 @@
 # production
 /build
 /dist
+/public/onnx-wasm
 
 # misc
 .DS_Store
