@@ -27,21 +27,21 @@ const ocrModels = {
     base: 'https://huggingface.co/tobytoy/yolo_base_home/resolve/main/paddle',
     det: '/ch_PP-OCRv4_det_infer.onnx',
     rec: '/ch_PP-OCRv4_rec_infer.onnx',
-    dict: '/ppocr_keys_v1.txt',
+    dict: `${import.meta.env.BASE_URL}paddle/ppocr_keys_v1.txt`,
   },
   v4_server: {
     label: 'PP-OCRv4 Server',
     base: 'https://huggingface.co/tobytoy/yolo_base_home/resolve/main/paddle',
     det: '/ch_PP-OCRv4_server_det_infer.onnx',
     rec: '/ch_PP-OCRv4_server_rec_infer.onnx',
-    dict: '/ppocr_keys_v1.txt',
+    dict: `${import.meta.env.BASE_URL}paddle/ppocr_keys_v1.txt`,
   },
   v3_balanced: {
     label: 'PP-OCRv3',
     base: 'https://huggingface.co/tobytoy/yolo_base_home/resolve/main/paddle',
     det: '/ch_PP-OCRv3_det_infer.onnx',
     rec: '/ch_PP-OCRv3_rec_infer.onnx',
-    dict: '/ppocr_keys_v1.txt',
+    dict: `${import.meta.env.BASE_URL}paddle/ppocr_keys_v1.txt`,
   },
 };
 
@@ -359,7 +359,9 @@ function getOcrCanvas() {
 
 function modelUrl(config, key) {
   const value = config[key];
-  return value.startsWith('http') ? value : `${config.base}${value}`;
+  return value.startsWith('http') || value.startsWith(import.meta.env.BASE_URL)
+    ? value
+    : `${config.base}${value}`;
 }
 
 async function fetchWithProgress(url, label, onProgress) {
@@ -398,7 +400,11 @@ async function fetchWithProgress(url, label, onProgress) {
         const percent = Math.round((received / total) * 100);
         onProgress(`${label} ${percent}%`);
       } else {
-        onProgress(`${label} ${(received / 1024 / 1024).toFixed(1)} MB`);
+        const size =
+          received < 1024 * 1024
+            ? `${Math.max(1, Math.round(received / 1024))} KB`
+            : `${(received / 1024 / 1024).toFixed(1)} MB`;
+        onProgress(`${label} ${size}`);
       }
     }
 
