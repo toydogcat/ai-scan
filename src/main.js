@@ -458,12 +458,25 @@ async function initOcrWorker() {
       ocrWorker = null;
     }
 
-    setOcrStatus(`正在下載 ${config.label}...`);
+    setOcrStatus(`正在平行下載模型組件...`);
     elements.ocrButton.disabled = true;
 
-    const detBuffer = await fetchWithProgress(modelUrl(config, 'det'), '偵測模型', setOcrStatus);
-    const recBuffer = await fetchWithProgress(modelUrl(config, 'rec'), '辨識模型', setOcrStatus);
-    const dictContent = await fetchTextWithTimeout(modelUrl(config, 'dict'), '字典');
+    const [detRes, recRes, dictRes] = await Promise.all([
+      fetch(modelUrl(config, 'det'), { cache: 'force-cache' }),
+      fetch(modelUrl(config, 'rec'), { cache: 'force-cache' }),
+      fetch(modelUrl(config, 'dict'), { cache: 'force-cache' }),
+    ]);
+
+    if (!detRes.ok || !recRes.ok || !dictRes.ok) {
+      throw new Error('模型檔案下載失敗，請檢查網路連線。');
+    }
+
+    setOcrStatus(`正在解壓縮並配置緩衝區...`);
+    const [detBuffer, recBuffer, dictContent] = await Promise.all([
+      detRes.arrayBuffer(),
+      recRes.arrayBuffer(),
+      dictRes.text(),
+    ]);
 
     const worker = new OCRWorker();
 
