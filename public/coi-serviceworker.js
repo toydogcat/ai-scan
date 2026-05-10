@@ -48,6 +48,11 @@ if (typeof window === 'undefined') {
                     }
                     newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
 
+                    // Remove encoding headers to prevent browser hanging on auto-decompressed bodies
+                    newHeaders.delete("Content-Encoding");
+                    // Remove Content-Length as it may no longer match the decompressed payload size
+                    newHeaders.delete("Content-Length");
+
                     return new Response(response.body, {
                         status: response.status,
                         statusText: response.statusText,
