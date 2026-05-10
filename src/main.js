@@ -77,11 +77,22 @@ document.querySelector('#app').innerHTML = `
             <div class="scan-frame" aria-hidden="true"></div>
           </div>
 
-          <label class="dropzone hidden" data-panel="image" id="dropzone">
-            <input id="imageInput" type="file" accept="image/*" />
-            <img id="imagePreview" alt="上傳圖片預覽" class="hidden" />
-            <span id="dropText">選擇或拖放圖片</span>
-          </label>
+          <div class="image-panel hidden" data-panel="image" id="imagePanel">
+            <label class="dropzone" id="dropzone">
+              <input id="imageInput" type="file" accept="image/*" />
+              <div class="dropzone-inner">
+                <div class="drop-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                <span id="dropText">選擇或拖放圖片</span>
+                <p class="drop-hint">支援 JPG, PNG, WEBP</p>
+              </div>
+            </label>
+            <div class="preview-container hidden" id="previewContainer">
+              <div class="preview-wrapper">
+                <img id="imagePreview" alt="上傳圖片預覽" />
+                <div id="ocrOverlay" class="ocr-overlay"></div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <aside class="controls" aria-label="控制項">
@@ -154,7 +165,10 @@ const elements = {
   dropzone: document.querySelector('#dropzone'),
   historyList: document.querySelector('#historyList'),
   imageInput: document.querySelector('#imageInput'),
+  imagePanel: document.querySelector('#imagePanel'),
+  previewContainer: document.querySelector('#previewContainer'),
   imagePreview: document.querySelector('#imagePreview'),
+  ocrOverlay: document.querySelector('#ocrOverlay'),
   openButton: document.querySelector('#openButton'),
   ocrButton: document.querySelector('#ocrButton'),
   ocrItems: document.querySelector('#ocrItems'),
@@ -319,6 +333,11 @@ function stopImagePreview() {
     URL.revokeObjectURL(currentImageUrl);
     currentImageUrl = '';
   }
+  elements.imagePreview.src = '';
+  elements.dropzone.classList.remove('hidden');
+  elements.previewContainer.classList.add('hidden');
+  elements.ocrOverlay.innerHTML = '';
+  elements.dropText.textContent = '選擇或拖放圖片';
 }
 
 function captureVideoFrame() {
@@ -437,6 +456,7 @@ function resetOcrOutput() {
   elements.ocrText.textContent = '尚未辨識文字';
   elements.ocrItems.innerHTML = '';
   elements.copyOcrButton.disabled = true;
+  elements.ocrOverlay.innerHTML = '';
 }
 
 async function initOcrWorker() {
@@ -537,6 +557,7 @@ function renderOcrResults(results, duration) {
   latestOcrText = items.map((item) => item.text).filter(Boolean).join('\n').trim();
   elements.ocrText.textContent = latestOcrText || '沒有辨識到文字';
   elements.copyOcrButton.disabled = !latestOcrText;
+  
   elements.ocrItems.innerHTML = items
     .map(
       (item) => `
@@ -549,6 +570,47 @@ function renderOcrResults(results, duration) {
       `,
     )
     .join('');
+
+  // Interactive Overlay Rendering
+  elements.ocrOverlay.innerHTML = '';
+  
+  if (mode === 'image' && items.length > 0) {
+    const { naturalWidth, naturalHeight } = elements.imagePreview;
+    
+    items.forEach((item) => {
+      if (!item.box) return;
+      
+      const box = document.createElement('div');
+      box.className = 'ocr-box-overlay';
+      
+      // Calculations directly ported from stable reference
+      const left = (item.box.x / naturalWidth) * 100;
+      const top = (item.box.y / naturalHeight) * 100;
+      const width = (item.box.width / naturalWidth) * 100;
+      const height = (item.box.height / naturalHeight) * 100;
+      
+      box.style.cssText = `
+        left: ${left}%;
+        top: ${top}%;
+        width: ${width}%;
+        height: ${height}%;
+      `;
+      
+      box.title = `${item.text} (${Math.round(item.confidence * 100)}%)`;
+      
+      box.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(item.text || '').then(() => {
+          const originalBg = box.style.backgroundColor;
+          box.style.backgroundColor = 'rgba(42, 199, 163, 0.5)';
+          setTimeout(() => { box.style.backgroundColor = ''; }, 300);
+          setOcrStatus('已複製選定文字', 'success');
+        });
+      });
+      
+      elements.ocrOverlay.appendChild(box);
+    });
+  }
 
   setOcrStatus(
     latestOcrText ? `OCR 完成，${items.length} 段文字，${duration} ms。` : 'OCR 完成，但沒有文字。',
@@ -605,9 +667,15 @@ async function scanImage(file) {
   stopCamera();
   stopImagePreview();
   resetOcrOutput();
+  
   currentImageUrl = URL.createObjectURL(file);
   elements.imagePreview.src = currentImageUrl;
-  elements.imagePreview.classList.remove('hidden');
+  
+  // Manage display containers
+  elements.dropzone.classList.add('hidden');
+  elements.previewContainer.classList.remove('hidden');
+  elements.ocrOverlay.innerHTML = '';
+
   elements.dropText.textContent = file.name;
   setStatus('正在讀取圖片...');
 
