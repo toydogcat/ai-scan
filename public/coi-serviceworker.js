@@ -23,6 +23,12 @@ if (typeof window === 'undefined') {
 
     self.addEventListener("fetch", function (event) {
         const r = event.request;
+        
+        // Do not intercept tracking scripts or fonts that do not support COEP/CORS explicitly
+        if (r.url.includes("busuanzi.ibruce.info") || r.url.includes("cdnjs.cloudflare.com")) {
+            return; 
+        }
+
         if (r.cache === "only-if-cached" && r.mode !== "same-origin") {
             return;
         }
