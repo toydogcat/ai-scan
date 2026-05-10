@@ -362,6 +362,70 @@ function modelUrl(config, key) {
   return value.startsWith('http') ? value : `${config.base}${value}`;
 }
 
+async function fetchWithProgress(url, label, onProgress) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 90000);
+
+  try {
+    const response = await fetch(url, {
+      cache: 'force-cache',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`${label} HTTP ${response.status}`);
+    }
+
+    const total = Number(response.headers.get('content-length')) || 0;
+
+    if (!response.body) {
+      onProgress(`${label} 下載中...`);
+      return await response.arrayBuffer();
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      chunks.push(value);
+      received += value.byteLength;
+
+      if (total) {
+        const percent = Math.round((received / total) * 100);
+        onProgress(`${label} ${percent}%`);
+      } else {
+        onProgress(`${label} ${(received / 1024 / 1024).toFixed(1)} MB`);
+      }
+    }
+
+    const buffer = new Uint8Array(received);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+      buffer.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return buffer.buffer;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`${label} 下載逾時，請重新按 OCR`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchTextWithTimeout(url, label) {
+  const buffer = await fetchWithProgress(url, label, setOcrStatus);
+  return new TextDecoder('utf-8').decode(buffer);
+}
+
 function resetOcrOutput() {
   latestOcrText = '';
   elements.ocrText.textContent = '尚未辨識文字';
@@ -391,38 +455,33 @@ async function initOcrWorker() {
     setOcrStatus(`正在下載 ${config.label}...`);
     elements.ocrButton.disabled = true;
 
-    const [detResponse, recResponse, dictResponse] = await Promise.all([
-      fetch(modelUrl(config, 'det')),
-      fetch(modelUrl(config, 'rec')),
-      fetch(modelUrl(config, 'dict')),
-    ]);
-
-    if (!detResponse.ok || !recResponse.ok || !dictResponse.ok) {
-      throw new Error('無法從 Hugging Face 下載 OCR 模型');
-    }
-
-    const [detBuffer, recBuffer, dictContent] = await Promise.all([
-      detResponse.arrayBuffer(),
-      recResponse.arrayBuffer(),
-      dictResponse.text(),
-    ]);
+    const detBuffer = await fetchWithProgress(modelUrl(config, 'det'), '偵測模型', setOcrStatus);
+    const recBuffer = await fetchWithProgress(modelUrl(config, 'rec'), '辨識模型', setOcrStatus);
+    const dictContent = await fetchTextWithTimeout(modelUrl(config, 'dict'), '字典');
 
     const worker = new OCRWorker();
 
     await new Promise((resolve, reject) => {
+      const initTimeout = window.setTimeout(() => {
+        reject(new Error('OCR Worker 初始化逾時，請重新按 OCR'));
+      }, 90000);
+
       worker.onmessage = (event) => {
         const { type, data } = event.data;
 
         if (type === 'status') {
           setOcrStatus(data);
         } else if (type === 'initialized') {
+          window.clearTimeout(initTimeout);
           resolve();
         } else if (type === 'error') {
+          window.clearTimeout(initTimeout);
           reject(new Error(data));
         }
       };
 
       worker.onerror = (error) => {
+        window.clearTimeout(initTimeout);
         reject(new Error(error.message || 'OCR Worker 發生錯誤'));
       };
 

@@ -5,6 +5,9 @@ const publicBase = `${import.meta.env.BASE_URL}onnx-wasm/`;
 const loaderUrl = `${publicBase}ort-wasm-simd-threaded.js`;
 
 const response = await fetch(loaderUrl);
+if (!response.ok) {
+  throw new Error(`ONNX Runtime loader 讀取失敗：${response.status}`);
+}
 const scriptText = await response.text();
 const blobUrl = URL.createObjectURL(new Blob([scriptText], { type: 'application/javascript' }));
 
