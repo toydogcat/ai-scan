@@ -57,7 +57,7 @@ document.querySelector('#app').innerHTML = `
   <main class="shell">
     <section class="hero" aria-labelledby="title">
       <div>
-        <p class="eyebrow">Vite + GitHub Pages</p>
+        <p class="eyebrow">Scan Tools</p>
         <h1 id="title">AI Scan</h1>
         <p class="intro">用相機或圖片掃描 QR Code、常見條碼，也能 OCR 辨識圖片文字並快速複製。</p>
       </div>
@@ -307,10 +307,10 @@ async function startCamera() {
       video: deviceId
         ? { deviceId: { exact: deviceId } }
         : {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
     };
 
     controls = await reader.decodeFromConstraints(constraints, elements.video, (result, error) => {
@@ -557,7 +557,7 @@ function renderOcrResults(results, duration) {
   latestOcrText = items.map((item) => item.text).filter(Boolean).join('\n').trim();
   elements.ocrText.textContent = latestOcrText || '沒有辨識到文字';
   elements.copyOcrButton.disabled = !latestOcrText;
-  
+
   elements.ocrItems.innerHTML = items
     .map(
       (item) => `
@@ -573,31 +573,31 @@ function renderOcrResults(results, duration) {
 
   // Interactive Overlay Rendering
   elements.ocrOverlay.innerHTML = '';
-  
+
   if (mode === 'image' && items.length > 0) {
     const { naturalWidth, naturalHeight } = elements.imagePreview;
-    
+
     items.forEach((item) => {
       if (!item.box) return;
-      
+
       const box = document.createElement('div');
       box.className = 'ocr-box-overlay';
-      
+
       // Calculations directly ported from stable reference
       const left = (item.box.x / naturalWidth) * 100;
       const top = (item.box.y / naturalHeight) * 100;
       const width = (item.box.width / naturalWidth) * 100;
       const height = (item.box.height / naturalHeight) * 100;
-      
+
       box.style.cssText = `
         left: ${left}%;
         top: ${top}%;
         width: ${width}%;
         height: ${height}%;
       `;
-      
+
       box.title = `${item.text} (${Math.round(item.confidence * 100)}%)`;
-      
+
       box.addEventListener('click', (e) => {
         e.stopPropagation();
         navigator.clipboard.writeText(item.text || '').then(() => {
@@ -607,7 +607,7 @@ function renderOcrResults(results, duration) {
           setOcrStatus('已複製選定文字', 'success');
         });
       });
-      
+
       elements.ocrOverlay.appendChild(box);
     });
   }
@@ -667,10 +667,10 @@ async function scanImage(file) {
   stopCamera();
   stopImagePreview();
   resetOcrOutput();
-  
+
   currentImageUrl = URL.createObjectURL(file);
   elements.imagePreview.src = currentImageUrl;
-  
+
   // Manage display containers
   elements.dropzone.classList.add('hidden');
   elements.previewContainer.classList.remove('hidden');
